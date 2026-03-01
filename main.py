@@ -1726,7 +1726,7 @@ class WifePlugin(Star):
                 Plain(f"{nick} 想和 "),
                 At(qq=int(tid)),
                 Plain(
-                    " 交换老婆啦！请对方用"同意交换 @发起者"或"拒绝交换 @发起者"来回应~"
+                    ' 交换老婆啦！请对方用"同意交换 @发起者"或"拒绝交换 @发起者"来回应~'
                 ),
             ]
         )
@@ -1745,7 +1745,7 @@ class WifePlugin(Star):
         rec = grp.get(uid)
         if not rec or rec.get("target") != tid:
             yield event.plain_result(
-                f"{nick}，请在命令后@发起者，或用"查看交换请求"命令查看当前请求哦~"
+                f'{nick}，请在命令后@发起者，或用"查看交换请求"命令查看当前请求哦~'
             )
             return
         cfg = load_group_config(gid)
@@ -1785,7 +1785,7 @@ class WifePlugin(Star):
         rec = grp.get(uid)
         if not rec or rec.get("target") != tid:
             yield event.plain_result(
-                f"{nick}，请在命令后@发起者，或用"查看交换请求"命令查看当前请求哦~"
+                f'{nick}，请在命令后@发起者，或用"查看交换请求"命令查看当前请求哦~'
             )
             return
         del grp[uid]
@@ -1838,7 +1838,7 @@ class WifePlugin(Star):
         text = (
             "当前交换请求如下：\n"
             + "\n".join(parts)
-            + "\n请在"同意交换"或"拒绝交换"命令后@发起者进行操作~"
+            + '\n请在"同意交换"或"拒绝交换"命令后@发起者进行操作~'
         )
         yield event.plain_result(text)
 
