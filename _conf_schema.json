@@ -1,10 +1,4 @@
 {
-    "need_prefix": {
-        "description": "启用触发前缀",
-        "type": "bool",
-        "hint": "启用后需要前缀来触发指令",
-        "default": false
-    },
     "ntr_max": {
         "description": "每日可牛老婆次数",
         "type": "int",
@@ -22,12 +16,6 @@
         "type": "int",
         "default": 3,
         "hint": "每天最多更换老婆的次数"
-    },
-    "swap_max_per_day": {
-        "description": "交换老婆功能每天可使用次数",
-        "type": "int",
-        "default": 2,
-        "hint": "每天可以交换老婆的次数"
     },
     "reset_max_uses_per_day": {
         "description": "重置功能每天可使用次数",
@@ -50,13 +38,55 @@
     "image_base_url": {
         "description": "图片服务器基础 URL",
         "type": "string",
-        "default": "https://cdn.jsdmirror.com/gh/monbed/wife@main",
-        "hint": "用于拼接图片链接的基础地址"
+        "default": "",
+        "hint": "用于拉取二次元老婆图片的基础地址"
     },
-    "image_list_url": {
-        "description": "图片列表 URL",
+    "swap_max_per_day": {
+        "description": "交换老婆功能每天可使用次数",
+        "type": "int",
+        "default": 2,
+        "hint": "每天可以交换老婆的次数"
+    },
+    "ntr_both_probability": {
+        "description": "同时牛走两个老婆的概率",
+        "type": "float",
+        "default": 0.30,
+        "hint": "当目标有牛来的老婆时，同时牛走抽的原配和牛来的老婆的概率，取值范围 [0, 1]"
+    },
+    "ntr_cd_duration": {
+        "description": "被牛走后的CD时长（秒）",
+        "type": "int",
+        "default": 3600,
+        "hint": "被牛走老婆后，需要等待的CD时长，单位秒（默认3600秒=1小时）"
+    },
+    "pure_love_enabled": {
+        "description": "是否启用纯爱模式",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，抽到指定出处的角色会自动进入纯爱模式"
+    },
+    "pure_love_source": {
+        "description": "纯爱模式触发关键词",
         "type": "string",
-        "default": "https://animewife.dpdns.org/list.txt",
-        "hint": "用于获取图片文件名列表的地址"
+        "default": "尘白禁区",
+        "hint": "角色卡文件名中出处部分包含此关键词时触发纯爱模式（如 尘白禁区!角色名.png）"
+    },
+    "pure_love_runaway_prob": {
+        "description": "纯爱老婆跑路概率",
+        "type": "float",
+        "default": 0.30,
+        "hint": "纯爱用户去牛别人时，自己的纯爱老婆跑路的概率，取值范围 [0, 1]"
+    },
+    "pure_love_reward_days": {
+        "description": "纯爱奖励周期（天）",
+        "type": "int",
+        "default": 3,
+        "hint": "纯爱模式每坚持多少天可以额外多抽一个老婆"
+    },
+    "pure_love_blacklist": {
+        "description": "纯爱奖励排除角色关键词",
+        "type": "string",
+        "default": "",
+        "hint": "纯爱奖励抽取时排除包含这些关键词的角色，多个关键词用英文逗号分隔（如：散兵,石块）"
     }
 }
