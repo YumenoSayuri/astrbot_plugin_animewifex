@@ -2,7 +2,7 @@ from astrbot.api.all import *
 from astrbot.api.star import StarTools
 from astrbot.api.event import filter
 from datetime import datetime, timedelta
-from typing import Tuple
+from typing import Tuple, Optional
 from urllib.parse import urljoin
 import random
 import os
@@ -233,7 +233,7 @@ load_ntr_cd()
     "astrbot_plugin_animewifex",
     "辉宝",
     "群二次元老婆插件修改版",
-    "1.7.0",
+    "1.8.0",
     "https://github.com/YumenoSayuri/astrbot_plugin_animewifex",
 )
 class WifePlugin(Star):
@@ -260,9 +260,21 @@ class WifePlugin(Star):
         except (TypeError, ValueError):
             self.pure_love_runaway_prob = 0.30
         try:
-            self.pure_love_reward_days = max(1, int(config.get("pure_love_reward_days", 3)))
+            self.pure_love_reward_days = max(1, int(config.get("pure_love_reward_days", 7)))
         except (TypeError, ValueError):
-            self.pure_love_reward_days = 3
+            self.pure_love_reward_days = 7
+        try:
+            self.pure_love_rotation_days = max(1, int(config.get("pure_love_rotation_days", 3)))
+        except (TypeError, ValueError):
+            self.pure_love_rotation_days = 3
+        try:
+            self.pure_love_max_bonus = max(1, int(config.get("pure_love_max_bonus", 3)))
+        except (TypeError, ValueError):
+            self.pure_love_max_bonus = 3
+        try:
+            self.pure_love_special_slots = max(0, int(config.get("pure_love_special_slots", 1)))
+        except (TypeError, ValueError):
+            self.pure_love_special_slots = 1
         # 纯爱奖励排除关键词列表
         blacklist_raw = config.get("pure_love_blacklist", "")
         if isinstance(blacklist_raw, str) and blacklist_raw.strip():
@@ -387,6 +399,20 @@ class WifePlugin(Star):
             return self.pure_love_source in source
         return False
 
+    def _sanitize_wife_list(self, wife_list) -> list:
+        """将老婆列表标准化为 [[img, date, nick], ...]"""
+        if not isinstance(wife_list, list):
+            wife_list = [wife_list] if wife_list else []
+        sanitized = []
+        for item in wife_list:
+            if isinstance(item, list) and len(item) > 0 and item[0]:
+                sanitized.append([
+                    item[0],
+                    item[1] if len(item) > 1 else "",
+                    item[2] if len(item) > 2 else "",
+                ])
+        return sanitized
+
     def _ensure_user_data(self, cfg: dict, uid: str) -> dict:
         """确保用户数据结构完整，返回用户数据引用"""
         if uid not in cfg:
@@ -395,72 +421,96 @@ class WifePlugin(Star):
         if not isinstance(user_data, dict):
             cfg[uid] = {"drawn": None, "ntr": []}
             user_data = cfg[uid]
-        if "ntr" not in user_data or user_data["ntr"] is None:
-            user_data["ntr"] = []
+
+        if "drawn" not in user_data:
+            user_data["drawn"] = None
+        user_data["ntr"] = self._sanitize_wife_list(user_data.get("ntr", []))
+        user_data["protected"] = bool(user_data.get("protected", False))
+
+        user_data["pure_love"] = bool(user_data.get("pure_love", False))
+        user_data["pure_love_start"] = user_data.get("pure_love_start", "")
+        user_data["pure_love_days"] = max(0, int(user_data.get("pure_love_days", 0) or 0))
+        user_data["pure_love_runaway"] = user_data.get("pure_love_runaway", "")
+        user_data["pure_love_bonus_wives"] = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+        user_data["pure_love_special_wives"] = self._sanitize_wife_list(user_data.get("pure_love_special_wives", []))
+        user_data["pure_love_bonus_available"] = max(0, int(user_data.get("pure_love_bonus_available", 0) or 0))
+        user_data["pure_love_last_reward_day"] = max(0, int(user_data.get("pure_love_last_reward_day", 0) or 0))
+        user_data["pure_love_reward_credit_days"] = max(0, int(user_data.get("pure_love_reward_credit_days", 0) or 0))
+
+        rotation_default = 1 if user_data.get("pure_love", False) and user_data.get("drawn") else 0
+        user_data["pure_love_rotation_count"] = max(
+            0,
+            int(user_data.get("pure_love_rotation_count", rotation_default) or 0)
+        )
+        if user_data.get("pure_love", False) and user_data.get("drawn") and user_data["pure_love_rotation_count"] == 0:
+            user_data["pure_love_rotation_count"] = 1
+
+        pending = user_data.get("pure_love_pending_replace")
+        if not isinstance(pending, dict) or not pending.get("new_wife"):
+            user_data["pure_love_pending_replace"] = None
+        else:
+            user_data["pure_love_pending_replace"] = {
+                "date": pending.get("date", ""),
+                "new_wife": pending.get("new_wife", ""),
+            }
         return user_data
 
     def _get_pure_love_info(self, user_data: dict) -> dict:
-        """获取用户纯爱模式信息
-        
-        返回 {
-            "active": bool,              # 纯爱模式是否生效
-            "start_date": str,           # 纯爱开始日期
-            "days": int,                 # 已坚持天数
-            "runaway_date": str,         # 跑路日期（当天禁抽）
-            "bonus_wives": list,         # 奖励老婆列表（永久保留）
-            "bonus_available": int,      # 当前可用的奖励抽老婆次数（0或1）
-            "last_reward_day": int,      # 上次获得奖励时的纯爱天数
-        }
-        """
+        """获取用户纯爱模式信息"""
         return {
             "active": user_data.get("pure_love", False),
             "start_date": user_data.get("pure_love_start", ""),
             "days": user_data.get("pure_love_days", 0),
             "runaway_date": user_data.get("pure_love_runaway", ""),
             "bonus_wives": user_data.get("pure_love_bonus_wives", []),
+            "special_wives": user_data.get("pure_love_special_wives", []),
+            "pending_replace": user_data.get("pure_love_pending_replace"),
             "bonus_available": user_data.get("pure_love_bonus_available", 0),
             "last_reward_day": user_data.get("pure_love_last_reward_day", 0),
+            "rotation_count": user_data.get("pure_love_rotation_count", 0),
+            "reward_credit_days": user_data.get("pure_love_reward_credit_days", 0),
         }
 
     def _set_pure_love(self, user_data: dict, start_date: str):
         """激活纯爱模式"""
         user_data["pure_love"] = True
         user_data["pure_love_start"] = start_date
-        user_data["pure_love_days"] = 1  # 第一天
+        user_data["pure_love_days"] = 1
         user_data["pure_love_runaway"] = ""
-        if "pure_love_bonus_wives" not in user_data:
+        user_data["pure_love_rotation_count"] = 1
+        user_data["pure_love_bonus_available"] = 0
+        user_data["pure_love_last_reward_day"] = 0
+        user_data["pure_love_reward_credit_days"] = max(0, int(user_data.get("pure_love_reward_credit_days", 0) or 0))
+        if "pure_love_bonus_wives" not in user_data or not isinstance(user_data["pure_love_bonus_wives"], list):
             user_data["pure_love_bonus_wives"] = []
-        user_data["pure_love_bonus_available"] = 0  # 初始无可用奖励
-        user_data["pure_love_last_reward_day"] = 0  # 初始无上次奖励天数
+        if "pure_love_special_wives" not in user_data or not isinstance(user_data["pure_love_special_wives"], list):
+            user_data["pure_love_special_wives"] = []
+        user_data["pure_love_pending_replace"] = None
 
     def _clear_pure_love(self, user_data: dict):
-        """清除纯爱模式（不删除奖励老婆，由跑路逻辑单独处理）"""
+        """清除纯爱模式（不删除奖励老婆，由调用方决定是否删除）"""
         user_data["pure_love"] = False
         user_data["pure_love_start"] = ""
         user_data["pure_love_days"] = 0
         user_data["pure_love_bonus_available"] = 0
         user_data["pure_love_last_reward_day"] = 0
+        user_data["pure_love_rotation_count"] = 0
+        user_data["pure_love_reward_credit_days"] = 0
+        user_data["pure_love_pending_replace"] = None
 
-    def _draw_bonus_wife(self, existing_wives: set) -> str:
-        """为纯爱用户抽取一个奖励老婆（排除黑名单和已拥有的）
-        
-        Args:
-            existing_wives: 已拥有的老婆文件名集合
-            
-        Returns:
-            抽到的老婆文件名，如果没有可选则返回空字符串
-        """
+    def _draw_bonus_wife(self, existing_wives: set, allow_pure_love_source: bool = True) -> str:
+        """为纯爱用户抽取一个奖励老婆（排除黑名单和已拥有的）"""
         local_imgs = os.listdir(IMG_DIR)
         if not local_imgs:
             return ""
-        
-        # 过滤：排除已拥有 + 排除黑名单
+
         candidates = []
         for img in local_imgs:
             if img in existing_wives:
                 continue
+            if not allow_pure_love_source and self._is_pure_love_source(img):
+                continue
             name = os.path.splitext(img)[0]
-            # 检查黑名单关键词
             blocked = False
             for kw in self.pure_love_blacklist:
                 if kw in name:
@@ -468,30 +518,190 @@ class WifePlugin(Star):
                     break
             if not blocked:
                 candidates.append(img)
-        
+
         if not candidates:
-            # 如果过滤后没有候选，放宽到只排除已拥有
-            candidates = [img for img in local_imgs if img not in existing_wives]
-        
+            candidates = [
+                img for img in local_imgs
+                if img not in existing_wives and (allow_pure_love_source or not self._is_pure_love_source(img))
+            ]
+
         if not candidates:
             return ""
-        
+
         return random.choice(candidates)
 
+    def _draw_pure_love_source_wife(self, existing_wives: set, exclude_current: str = "") -> str:
+        """抽取新的纯爱主格子尘白角色（优先不与任何格子重复）"""
+        local_imgs = os.listdir(IMG_DIR)
+        candidates = [
+            img for img in local_imgs
+            if self._is_pure_love_source(img) and img != exclude_current and img not in existing_wives
+        ]
+        if not candidates:
+            candidates = [
+                img for img in local_imgs
+                if self._is_pure_love_source(img) and img != exclude_current
+            ]
+        if not candidates:
+            return ""
+        return random.choice(candidates)
+
+    def _get_all_owned_wives(self, user_data: dict, include_ntr: bool = True, include_pending: bool = False) -> set:
+        """获取用户当前所有已占用格子的老婆集合"""
+        owned = set()
+        drawn = user_data.get("drawn")
+        if isinstance(drawn, list) and len(drawn) > 0 and drawn[0]:
+            owned.add(drawn[0])
+
+        if include_ntr:
+            for nw in self._sanitize_wife_list(user_data.get("ntr", [])):
+                if nw[0]:
+                    owned.add(nw[0])
+
+        for bw in self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", [])):
+            if bw[0]:
+                owned.add(bw[0])
+
+        for sw in self._sanitize_wife_list(user_data.get("pure_love_special_wives", [])):
+            if sw[0]:
+                owned.add(sw[0])
+
+        if include_pending:
+            pending = user_data.get("pure_love_pending_replace")
+            if isinstance(pending, dict) and pending.get("new_wife"):
+                owned.add(pending["new_wife"])
+
+        return owned
+
+    def _get_valid_pending_replace(self, user_data: dict, today: str) -> Optional[dict]:
+        """获取当天有效的待替换奖励，过期则自动失效"""
+        pending = user_data.get("pure_love_pending_replace")
+        if not isinstance(pending, dict) or not pending.get("new_wife"):
+            return None
+        if pending.get("date") != today:
+            user_data["pure_love_pending_replace"] = None
+            return None
+        return pending
+
+    def _cleanup_pure_love_slots(self, user_data: dict) -> list:
+        """清理历史超标/重复的纯爱副格子和特殊格子"""
+        notices = []
+        seen = set()
+
+        drawn = user_data.get("drawn")
+        if isinstance(drawn, list) and len(drawn) > 0 and drawn[0]:
+            seen.add(drawn[0])
+
+        for nw in self._sanitize_wife_list(user_data.get("ntr", [])):
+            if nw[0]:
+                seen.add(nw[0])
+
+        special = self._sanitize_wife_list(user_data.get("pure_love_special_wives", []))
+        new_special = []
+        for sw in special:
+            if sw[0] in seen:
+                continue
+            if len(new_special) >= self.pure_love_special_slots:
+                continue
+            new_special.append(sw)
+            seen.add(sw[0])
+        user_data["pure_love_special_wives"] = new_special
+
+        bonus = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+        new_bonus = []
+        overflow_removed = 0
+        for bw in bonus:
+            if bw[0] in seen:
+                continue
+            if len(new_bonus) >= self.pure_love_max_bonus:
+                overflow_removed += 1
+                continue
+            new_bonus.append(bw)
+            seen.add(bw[0])
+        user_data["pure_love_bonus_wives"] = new_bonus
+
+        if overflow_removed > 0:
+            credit = max(0, int(user_data.get("pure_love_reward_credit_days", 0) or 0))
+            user_data["pure_love_reward_credit_days"] = credit + overflow_removed * 3
+            notices.append(
+                f"检测到历史副格子超过{self.pure_love_max_bonus}个，已移除{overflow_removed}个多余角色，并补偿减少{overflow_removed * 3}天纯爱奖励等待时间。"
+            )
+
+        pending = self._get_valid_pending_replace(user_data, get_today())
+        if pending and pending.get("new_wife") in seen:
+            user_data["pure_love_pending_replace"] = None
+
+        return notices
+
+    def _build_pending_replace_text(self, user_data: dict, new_img: str) -> str:
+        """构建待替换提示文本"""
+        parts = [
+            f"🎁 这次纯爱奖励抽到了：{self._format_wife_display(new_img)}",
+            "当前可替换位已满，请在今天24点前回复对应字母：",
+        ]
+        drawn = user_data.get("drawn")
+        if isinstance(drawn, list) and len(drawn) > 0 and drawn[0]:
+            parts.append(f"A. 主格子：{self._format_wife_display(drawn[0])}（替换后将解除纯爱模式）")
+
+        bonus = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+        for idx, bw in enumerate(bonus[:3]):
+            label = chr(ord("B") + idx)
+            parts.append(f"{label}. 副格子：{self._format_wife_display(bw[0])}")
+
+        parts.append("特殊尘白副格子不参与替换。")
+        parts.append("回复 不换 则保留现状。")
+        return "\n".join(parts)
+
+    def _handle_pending_replace_choice(self, user_data: dict, choice: str, today: str, nick: str) -> Tuple[bool, str]:
+        """处理 A/B/C/D/不换 的替换选择"""
+        pending = self._get_valid_pending_replace(user_data, today)
+        if not pending:
+            return False, ""
+
+        new_img = pending.get("new_wife", "")
+        new_display = self._format_wife_display(new_img)
+
+        if choice == "不换":
+            user_data["pure_love_pending_replace"] = None
+            return True, f"已保留当前配置，本次奖励 {new_display} 不进行替换。"
+
+        upper = choice.upper()
+        if upper == "A":
+            drawn = user_data.get("drawn")
+            if not isinstance(drawn, list) or len(drawn) == 0 or not drawn[0]:
+                user_data["pure_love_pending_replace"] = None
+                return True, f"主格子不存在，本次奖励 {new_display} 已取消替换。"
+            old_display = self._format_wife_display(drawn[0])
+            drawn[0] = new_img
+            drawn[1] = today
+            drawn[2] = nick
+            user_data["drawn"] = drawn
+            self._clear_pure_love(user_data)
+            user_data["protected"] = False
+            user_data["pure_love_pending_replace"] = None
+            return True, f"已将主格子 {old_display} 替换为 {new_display}，纯爱模式已解除。"
+
+        if upper in ("B", "C", "D"):
+            slot_index = ord(upper) - ord("B")
+            bonus = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+            if slot_index >= len(bonus):
+                return False, "该副格子不存在，请回复 A/B/C/D 或 不换。"
+            old_display = self._format_wife_display(bonus[slot_index][0])
+            bonus[slot_index] = [new_img, today, nick]
+            user_data["pure_love_bonus_wives"] = bonus
+            user_data["pure_love_pending_replace"] = None
+            return True, f"已将{upper}位副格子 {old_display} 替换为 {new_display}。"
+
+        return False, "请回复 A/B/C/D 或 不换。"
+
     def _handle_pure_love_runaway(self, user_data: dict, today: str):
-        """处理纯爱老婆跑路
-        
-        - 清除 drawn（尘白老婆跑了）
-        - 清除纯爱状态（含奖励计数器）
-        - 设置跑路日期（当天禁抽）
-        - 清除所有奖励老婆（跑路 = 所有老婆一起跑）
-        - 保留 ntr 来的老婆
-        """
+        """处理纯爱老婆跑路"""
         user_data["drawn"] = None
-        self._clear_pure_love(user_data)  # 会清除 bonus_available 和 last_reward_day
+        self._clear_pure_love(user_data)
         user_data["pure_love_runaway"] = today
         user_data["pure_love_bonus_wives"] = []
-        # protected 也清除
+        user_data["pure_love_special_wives"] = []
+        user_data["pure_love_pending_replace"] = None
         user_data["protected"] = False
 
     def _format_wife_display(self, img_name: str) -> str:
@@ -509,19 +719,34 @@ class WifePlugin(Star):
         """消息分发，根据命令调用对应方法（仅处理无前缀触发）"""
         if not hasattr(event.message_obj, "group_id"):
             return
-        
-        # 获取原始消息文本，检查是否以 / 开头
+
         raw_text = self._get_raw_text(event)
-        # 如果原始消息以 / 开头，跳过（由 @filter.command 装饰器处理，避免重复触发）
         if raw_text.startswith("/"):
             return
-        
+
         text = event.message_str.strip()
+        upper_text = text.upper()
+
+        if upper_text in ("A", "B", "C", "D") or text == "不换":
+            gid = str(event.message_obj.group_id)
+            uid = str(event.get_sender_id())
+            today = get_today()
+            cfg = load_group_config(gid)
+            user_data = self._ensure_user_data(cfg, uid)
+            pending = self._get_valid_pending_replace(user_data, today)
+            if pending:
+                changed, reply = self._handle_pending_replace_choice(user_data, text, today, event.get_sender_name())
+                if changed:
+                    save_group_config(gid, cfg)
+                if reply:
+                    yield event.plain_result(reply)
+                return
+
         for cmd, func in self.commands.items():
             if text.startswith(cmd):
                 async for res in func(event):
                     yield res
-                return  # 匹配到命令后直接返回，不再继续
+                return
 
     # ==================== 核心命令 ====================
 
@@ -571,94 +796,137 @@ class WifePlugin(Star):
         if pl_info["active"] and drawn_wife is not None:
             # 纯爱老婆还在，检查是否需要刷新天数
             if drawn_wife[1] != today:
-                # 新的一天到了，天数+1，更新日期但保持老婆不变
+                # ---- 新的一天：天数+1，轮换检查，奖励检查 ----
                 new_days = pl_info["days"] + 1
                 user_data["pure_love_days"] = new_days
-                drawn_wife[1] = today  # 更新日期标记
-                drawn_wife[2] = nick   # 更新昵称（可能改名了）
+
+                # ---- 超标清理（兼容旧数据）----
+                cleanup_notices = self._cleanup_pure_love_slots(user_data)
+
+                # ---- 主格子轮换 ----
+                rotation_count = user_data.get("pure_love_rotation_count", 1) + 1
+                rotation_msg = ""
+                if rotation_count > self.pure_love_rotation_days:
+                    old_img = drawn_wife[0]
+                    old_display = self._format_wife_display(old_img)
+                    existing = self._get_all_owned_wives(user_data, include_ntr=True)
+                    new_img = self._draw_pure_love_source_wife(existing, exclude_current=old_img)
+                    if new_img:
+                        drawn_wife[0] = new_img
+                        rotation_count = 1
+                        new_display = self._format_wife_display(new_img)
+                        rotation_msg = f"🔄 上一个来自尘白的纯爱老婆{old_display}已执勤{self.pure_love_rotation_days}天，今天的秘书是{new_display}！"
+                    else:
+                        rotation_count = 1
+                user_data["pure_love_rotation_count"] = rotation_count
+
+                drawn_wife[1] = today
+                drawn_wife[2] = nick
                 user_data["drawn"] = drawn_wife
-                
-                # ===== 纯爱奖励机制（修正版）=====
-                # 检查是否应该获得新的奖励次数
-                # 逻辑：从上次领奖后算起，每坚持 N 天获得 1 次奖励机会
+
+                # ---- 纯爱奖励机制（v1.8.0 改版）----
                 last_reward_day = user_data.get("pure_love_last_reward_day", 0)
                 bonus_available = user_data.get("pure_love_bonus_available", 0)
-                days_since_last_reward = new_days - last_reward_day
-                
-                if bonus_available == 0 and days_since_last_reward >= self.pure_love_reward_days:
-                    # 距上次领奖已满 N 天，获得 1 次奖励机会
+                credit = user_data.get("pure_love_reward_credit_days", 0)
+                effective_days_since_reward = (new_days - last_reward_day) + credit
+
+                if bonus_available == 0 and effective_days_since_reward >= self.pure_love_reward_days:
                     user_data["pure_love_bonus_available"] = 1
                     bonus_available = 1
-                
-                # 如果有可用奖励次数，立即使用：额外抽一个老婆
-                current_bonus = user_data.get("pure_love_bonus_wives", [])
-                if not isinstance(current_bonus, list):
-                    current_bonus = []
-                
+                    if credit > 0:
+                        used_credit = min(credit, self.pure_love_reward_days - (new_days - last_reward_day))
+                        user_data["pure_love_reward_credit_days"] = max(0, credit - max(0, used_credit))
+
+                current_bonus = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+                current_special = self._sanitize_wife_list(user_data.get("pure_love_special_wives", []))
+
                 bonus_msgs = []
+                pending_replace_text = ""
                 if bonus_available > 0:
-                    # 收集已有的老婆名，避免重复
-                    existing = set()
-                    if drawn_wife:
-                        existing.add(drawn_wife[0])
-                    for nw in ntr_wife_list:
-                        if isinstance(nw, list) and len(nw) > 0:
-                            existing.add(nw[0])
-                    for bw in current_bonus:
-                        if isinstance(bw, list) and len(bw) > 0:
-                            existing.add(bw[0])
-                    
+                    existing = self._get_all_owned_wives(user_data, include_ntr=True, include_pending=True)
                     bonus_img = self._draw_bonus_wife(existing)
                     if bonus_img:
-                        current_bonus.append([bonus_img, today, nick])
-                        display = self._format_wife_display(bonus_img)
-                        bonus_msgs.append(display)
-                    
-                    # 使用后：奖励次数归 0，记录本次领奖时的天数
+                        is_cb_source = self._is_pure_love_source(bonus_img)
+                        if is_cb_source and len(current_special) < self.pure_love_special_slots:
+                            current_special.append([bonus_img, today, nick])
+                            user_data["pure_love_special_wives"] = current_special
+                            display = self._format_wife_display(bonus_img)
+                            bonus_msgs.append(f"{display}（✨特殊尘白副格子，不占名额）")
+                        elif len(current_bonus) < self.pure_love_max_bonus:
+                            current_bonus.append([bonus_img, today, nick])
+                            user_data["pure_love_bonus_wives"] = current_bonus
+                            display = self._format_wife_display(bonus_img)
+                            bonus_msgs.append(display)
+                        else:
+                            user_data["pure_love_pending_replace"] = {"date": today, "new_wife": bonus_img}
+                            pending_replace_text = self._build_pending_replace_text(user_data, bonus_img)
+
                     user_data["pure_love_bonus_available"] = 0
                     user_data["pure_love_last_reward_day"] = new_days
-                
+
                 user_data["pure_love_bonus_wives"] = current_bonus
-                # 日期变化时清除保护状态（管理员派发的保护不跨天）—— 但纯爱保护不清除
+                user_data["pure_love_special_wives"] = current_special
+
                 if user_data.get("protected", False) and not pl_info["active"]:
                     user_data["protected"] = False
-                
+
                 save_group_config(gid, cfg)
-                
-                # 构建消息
+
+                # ---- 构建消息 ----
                 img = drawn_wife[0]
-                name = os.path.splitext(img)[0]
-                if "!" in name:
-                    source, chara = name.split("!", 1)
-                    text = f"💕 {nick}，你的纯爱老婆{chara}还在身边哦~已坚持 {new_days} 天！"
+                fname = os.path.splitext(img)[0]
+                if "!" in fname:
+                    _, chara = fname.split("!", 1)
                 else:
-                    text = f"💕 {nick}，你的纯爱老婆{name}还在身边哦~已坚持 {new_days} 天！"
-                
-                # 距离下次奖励
+                    chara = fname
+
+                if rotation_msg:
+                    text = f"{rotation_msg}\n💕 {nick}，纯爱坚持 {new_days} 天！"
+                else:
+                    text = f"💕 {nick}，你的纯爱老婆{chara}还在身边哦~已坚持 {new_days} 天！"
+
                 current_last_reward = user_data.get("pure_love_last_reward_day", 0)
-                days_to_next = self.pure_love_reward_days - (new_days - current_last_reward)
-                if days_to_next > 0:
-                    text += f"\n📅 距离下次纯爱奖励还有 {days_to_next} 天"
-                elif days_to_next == 0 and user_data.get("pure_love_bonus_available", 0) > 0:
-                    text += f"\n🎁 你有 1 次纯爱奖励可用，明天抽老婆时自动领取！"
-                
-                # 显示奖励消息
+                remaining_credit = user_data.get("pure_love_reward_credit_days", 0)
+                effective_to_next = self.pure_love_reward_days - ((new_days - current_last_reward) + remaining_credit)
+                if effective_to_next > 0:
+                    text += f"\n📅 距离下次纯爱奖励还有 {effective_to_next} 天"
+
                 if bonus_msgs:
                     text += f"\n🎁 纯爱奖励！你获得了新老婆：{'、'.join(bonus_msgs)}"
-                
+
+                for notice in cleanup_notices:
+                    text += f"\n⚠️ {notice}"
+
                 chain = [Plain(text)]
                 main_image = self.build_image_component(img)
                 if main_image:
                     chain.append(main_image)
-                
-                # 显示新抽到的奖励老婆图片
+
                 if bonus_msgs:
-                    for bw in current_bonus[-len(bonus_msgs):]:
+                    for bw in current_bonus[-1:]:
                         if isinstance(bw, list) and len(bw) > 0:
                             bw_img = self.build_image_component(bw[0])
                             if bw_img:
                                 chain.append(bw_img)
-                
+                    if current_special:
+                        last_sp = current_special[-1]
+                        if isinstance(last_sp, list) and len(last_sp) > 0:
+                            sp_img = self.build_image_component(last_sp[0])
+                            if sp_img:
+                                chain.append(sp_img)
+
+                # 显示已有副格子老婆
+                existing_bonus_display = [self._format_wife_display(bw[0]) for bw in current_bonus if isinstance(bw, list) and len(bw) > 0]
+                if existing_bonus_display and not bonus_msgs:
+                    text += f"\n🎁 纯爱副格子老婆：{'、'.join(existing_bonus_display)}"
+                    chain[0] = Plain(text)
+
+                # 显示特殊尘白副格子
+                existing_special_display = [self._format_wife_display(sw[0]) for sw in current_special if isinstance(sw, list) and len(sw) > 0]
+                if existing_special_display:
+                    text += f"\n✨ 特殊尘白副格子：{'、'.join(existing_special_display)}"
+                    chain[0] = Plain(text)
+
                 # 显示牛来的老婆
                 if ntr_wife_list:
                     ntr_texts = []
@@ -672,20 +940,14 @@ class WifePlugin(Star):
                     if ntr_texts:
                         text += f"\n你还有{len(ntr_texts)}个牛来的老婆：{', '.join(ntr_texts)}~"
                         chain[0] = Plain(text)
-                
-                # 显示已有的奖励老婆信息
-                existing_bonus_display = []
-                for bw in current_bonus:
-                    if isinstance(bw, list) and len(bw) > 0:
-                        existing_bonus_display.append(self._format_wife_display(bw[0]))
-                if existing_bonus_display and not bonus_msgs:
-                    text += f"\n🎁 纯爱奖励老婆：{'、'.join(existing_bonus_display)}"
-                    chain[0] = Plain(text)
-                
+
                 try:
                     yield event.chain_result(chain)
                 except:
                     yield event.plain_result(text)
+
+                if pending_replace_text:
+                    yield event.plain_result(pending_replace_text)
                 return
             else:
                 # 今天已经看过了（日期一样），直接展示
@@ -696,12 +958,12 @@ class WifePlugin(Star):
             # 日期变化时清除保护状态（管理员派发的保护不跨天）
             if user_data.get("protected", False) and not pl_info["active"]:
                 user_data["protected"] = False
-            
+
             # 如果之前有纯爱状态但老婆没了（不应该发生，但防御性处理）
             if pl_info["active"] and drawn_wife is None:
                 self._clear_pure_love(user_data)
                 pl_info = self._get_pure_love_info(user_data)
-            
+
             local_imgs = os.listdir(IMG_DIR)
             if local_imgs:
                 img = random.choice(local_imgs)
@@ -714,27 +976,29 @@ class WifePlugin(Star):
                 except:
                     yield event.plain_result("抱歉，今天的老婆获取失败了，请稍后再试~")
                     return
-            
+
             user_data["drawn"] = [img, today, nick]
-            
+
             # 检查是否触发纯爱模式
             if self._is_pure_love_source(img):
                 self._set_pure_love(user_data, today)
                 user_data["protected"] = True  # 纯爱自动保护
-            
+
             # 清除旧的奖励老婆（如果不再是纯爱模式）
             if not user_data.get("pure_love", False):
                 user_data["pure_love_bonus_wives"] = []
-            
+                user_data["pure_love_special_wives"] = []
+                user_data["pure_love_pending_replace"] = None
+
             save_group_config(gid, cfg)
             drawn_wife = user_data["drawn"]
-        
+
         # ===== 通用展示逻辑 =====
         img = drawn_wife[0]
         name = os.path.splitext(img)[0]
         is_pure_love = user_data.get("pure_love", False)
         pl_days = user_data.get("pure_love_days", 0)
-        
+
         if "!" in name:
             source, chara = name.split("!", 1)
             if is_pure_love:
@@ -742,7 +1006,8 @@ class WifePlugin(Star):
                 if pl_days > 0:
                     text += f"\n💕 纯爱坚持 {pl_days} 天"
                     last_rwd = user_data.get("pure_love_last_reward_day", 0)
-                    days_to_next = self.pure_love_reward_days - (pl_days - last_rwd)
+                    credit = user_data.get("pure_love_reward_credit_days", 0)
+                    days_to_next = self.pure_love_reward_days - ((pl_days - last_rwd) + credit)
                     if user_data.get("pure_love_bonus_available", 0) > 0:
                         text += f" | 🎁 有1次奖励待领取"
                     elif days_to_next > 0:
@@ -754,29 +1019,37 @@ class WifePlugin(Star):
                 text = f"💕 {nick}，你今天的老婆是{name}，纯爱模式已激活！请好好珍惜哦~"
             else:
                 text = f"{nick}，你今天的老婆是{name}，请好好珍惜哦~"
-        
+
         # 构建图片链
         chain = [Plain(text)]
-        
+
         # 添加抽到的老婆图片
         main_image = self.build_image_component(img)
         if main_image:
             chain.append(main_image)
-        
-        # 显示奖励老婆
-        bonus_wives = user_data.get("pure_love_bonus_wives", [])
-        if bonus_wives and isinstance(bonus_wives, list):
-            bonus_texts = []
+
+        # 显示副格子老婆
+        bonus_wives = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+        if bonus_wives:
+            bonus_texts = [self._format_wife_display(bw[0]) for bw in bonus_wives]
             for bw in bonus_wives:
-                if isinstance(bw, list) and len(bw) > 0:
-                    bonus_texts.append(self._format_wife_display(bw[0]))
-                    bw_img = self.build_image_component(bw[0])
-                    if bw_img:
-                        chain.append(bw_img)
-            if bonus_texts:
-                text += f"\n🎁 纯爱奖励老婆：{'、'.join(bonus_texts)}"
-                chain[0] = Plain(text)
-        
+                bw_img = self.build_image_component(bw[0])
+                if bw_img:
+                    chain.append(bw_img)
+            text += f"\n🎁 纯爱副格子老婆：{'、'.join(bonus_texts)}"
+            chain[0] = Plain(text)
+
+        # 显示特殊尘白副格子
+        special_wives = self._sanitize_wife_list(user_data.get("pure_love_special_wives", []))
+        if special_wives:
+            special_texts = [self._format_wife_display(sw[0]) for sw in special_wives]
+            for sw in special_wives:
+                sw_img = self.build_image_component(sw[0])
+                if sw_img:
+                    chain.append(sw_img)
+            text += f"\n✨ 特殊尘白副格子：{'、'.join(special_texts)}"
+            chain[0] = Plain(text)
+
         # 如果有牛来的老婆，也一起显示
         if ntr_wife_list:
             ntr_texts = []
@@ -787,11 +1060,17 @@ class WifePlugin(Star):
                 ntr_image = self.build_image_component(ntr_wife[0])
                 if ntr_image:
                     chain.append(ntr_image)
-            
+
             if ntr_texts:
                 text += f"\n你还有{len(ntr_texts)}个牛来的老婆：{', '.join(ntr_texts)}~"
                 chain[0] = Plain(text)
-        
+
+        # 待替换提示
+        pending = self._get_valid_pending_replace(user_data, today)
+        if pending:
+            text += f"\n⏳ 你有一个待替换的纯爱奖励老婆，请回复 A/B/C/D 或 不换"
+            chain[0] = Plain(text)
+
         try:
             yield event.chain_result(chain)
         except:
@@ -1107,18 +1386,29 @@ class WifePlugin(Star):
             if main_image:
                 chain.append(main_image)
         
-        # 显示奖励老婆
-        bonus_wives = user_data.get("pure_love_bonus_wives", [])
-        if bonus_wives and isinstance(bonus_wives, list):
+        # 显示副格子老婆
+        bonus_wives = self._sanitize_wife_list(user_data.get("pure_love_bonus_wives", []))
+        if bonus_wives:
             bonus_texts = []
             for bw in bonus_wives:
-                if isinstance(bw, list) and len(bw) > 0:
-                    bonus_texts.append(self._format_wife_display(bw[0]))
-                    bw_img = self.build_image_component(bw[0])
-                    if bw_img:
-                        chain.append(bw_img)
+                bonus_texts.append(self._format_wife_display(bw[0]))
+                bw_img = self.build_image_component(bw[0])
+                if bw_img:
+                    chain.append(bw_img)
             if bonus_texts:
-                text_parts.append(f"🎁 纯爱奖励老婆：{'、'.join(bonus_texts)}")
+                text_parts.append(f"🎁 纯爱副格子老婆：{'、'.join(bonus_texts)}")
+
+        # 显示特殊尘白副格子
+        special_wives = self._sanitize_wife_list(user_data.get("pure_love_special_wives", []))
+        if special_wives:
+            special_texts = []
+            for sw in special_wives:
+                special_texts.append(self._format_wife_display(sw[0]))
+                sw_img = self.build_image_component(sw[0])
+                if sw_img:
+                    chain.append(sw_img)
+            if special_texts:
+                text_parts.append(f"✨ 特殊尘白副格子：{'、'.join(special_texts)}")
         
         # 显示所有牛来的老婆
         if ntr_wife_list:
@@ -1258,6 +1548,8 @@ class WifePlugin(Star):
         if cfg[tid].get("pure_love", False):
             self._clear_pure_love(cfg[tid])
             cfg[tid]["pure_love_bonus_wives"] = []
+            cfg[tid]["pure_love_special_wives"] = []
+            cfg[tid]["pure_love_pending_replace"] = None
         save_group_config(gid, cfg)
         
         # 清除该用户的CD（如果有）
@@ -1426,8 +1718,12 @@ class WifePlugin(Star):
                         "pure_love": False, "pure_love_start": "",
                         "pure_love_days": 0, "pure_love_runaway": "",
                         "pure_love_bonus_wives": [],
+                        "pure_love_special_wives": [],
                         "pure_love_bonus_available": 0,
-                        "pure_love_last_reward_day": 0}
+                        "pure_love_last_reward_day": 0,
+                        "pure_love_rotation_count": 0,
+                        "pure_love_reward_credit_days": 0,
+                        "pure_love_pending_replace": None}
             save_group_config(gid, cfg)
             # 清除CD记录
             grp_cd = ntr_cd.get(gid, {})
@@ -1476,6 +1772,8 @@ class WifePlugin(Star):
         if has_pure_love:
             self._clear_pure_love(cfg[tid])
             cfg[tid]["pure_love_bonus_wives"] = []
+            cfg[tid]["pure_love_special_wives"] = []
+            cfg[tid]["pure_love_pending_replace"] = None
         save_group_config(gid, cfg)
         target_name = "该用户"
         drawn = target_data.get("drawn")

@@ -80,8 +80,26 @@
     "pure_love_reward_days": {
         "description": "纯爱奖励周期（天）",
         "type": "int",
+        "default": 7,
+        "hint": "纯爱模式每坚持多少天可以额外多抽一个老婆（副格子）"
+    },
+    "pure_love_rotation_days": {
+        "description": "纯爱主格子轮换周期（天）",
+        "type": "int",
         "default": 3,
-        "hint": "纯爱模式每坚持多少天可以额外多抽一个老婆"
+        "hint": "纯爱模式主格子尘白老婆每服务多少天后自动轮换为新的随机尘白角色"
+    },
+    "pure_love_max_bonus": {
+        "description": "纯爱副格子上限",
+        "type": "int",
+        "default": 3,
+        "hint": "纯爱奖励副格子最多可以拥有的数量"
+    },
+    "pure_love_special_slots": {
+        "description": "特殊尘白副格子上限",
+        "type": "int",
+        "default": 1,
+        "hint": "奖励抽到尘白角色时放入特殊格子（不占副格子名额），此项设置特殊格子的数量上限"
     },
     "pure_love_blacklist": {
         "description": "纯爱奖励排除角色关键词",
